@@ -46,7 +46,7 @@ CREATE TABLE FACT_SALES (
                             prices_currency VARCHAR(10)
 );
 
--- Insert data into dimension tables
+-- Insert data into dimension product table
 INSERT INTO DIM_PRODUCT (manufacturer_id, brand, categories, name, weight, colors, image_urls, source_id)
 SELECT
     DISTINCT ON (id)
@@ -61,16 +61,23 @@ SELECT
 FROM
     shoes;
 
+
+-- Insert data into dimension condition table
 INSERT INTO DIM_CONDITION (prices_condition)
 SELECT DISTINCT prices_condition
 FROM shoes
 WHERE prices_condition IS NOT NULL;
 
+
+-- Insert data into dimension manufacturer table
 INSERT INTO DIM_MANUFACTURER (manufacturer, manufacturer_number)
 SELECT DISTINCT manufacturer, manufacturernumber
 FROM shoes
-WHERE manufacturer IS NOT NULL;
+WHERE (manufacturer) IS NOT NULL OR
+      manufacturernumber IS NOT NULL;
 
+
+-- Insert data into dimension date table
 INSERT INTO DIM_DATE (dateadded, dateupdated)
 SELECT DISTINCT
     CASE
@@ -85,6 +92,8 @@ SELECT DISTINCT
         END as dateupdated
 FROM shoes
 WHERE dateadded IS NOT NULL OR dateupdated IS NOT NULL;
+
+
 
 -- Add UNIQUE constraint to merchants_name if it doesn't exist
 ALTER TABLE DIM_MERCHANT ADD CONSTRAINT unique_merchant_name UNIQUE (merchants_name);
@@ -103,6 +112,8 @@ WITH extracted_merchants AS (
              WHERE merchants IS NOT NULL AND merchants != ''
          ) as expanded
 )
+
+-- Insert data into dimension merchant table
 INSERT INTO DIM_MERCHANT (merchants_name)
 SELECT merchant_name
 FROM extracted_merchants
@@ -111,12 +122,20 @@ ON CONFLICT (merchants_name) DO NOTHING;
 
 SELECT COUNT(*) FROM DIM_MERCHANT;
 
+
+
 -- Update manufacturer_id in DIM_PRODUCT as it was null earlier
 UPDATE DIM_PRODUCT dp
-SET manufacturer_id = dm.manufacturer_id
-FROM shoes s
-         JOIN DIM_MANUFACTURER dm ON s.manufacturer = dm.manufacturer
-WHERE s.id = dp.source_id;
+SET manufacturer_id = (
+    SELECT dm.manufacturer_id
+    FROM shoes s
+             JOIN DIM_MANUFACTURER dm ON
+        COALESCE(s.manufacturer, s.manufacturernumber) = COALESCE(dm.manufacturer, dm.manufacturer_number)
+    WHERE s.id = dp.source_id
+    LIMIT 1
+);
+
+
 
 -- Insert data into fact table
 INSERT INTO FACT_SALES (date_id, product_id, merchant_id, manufacturer_id, condition_id, prices_amountmin, prices_amountmax, prices_currency)
@@ -126,8 +145,8 @@ SELECT
     dm.merchant_id,
     dmanuf.manufacturer_id,
     dc.condition_id,
-    s.prices_amountmin::decimal(10,2),
-    s.prices_amountmax::decimal(10,2),
+    s.prices_amountmin::NUMERIC,
+    s.prices_amountmax::NUMERIC,
     s.prices_currency
 FROM
     shoes s
@@ -139,7 +158,8 @@ FROM
         WHERE s.merchants LIKE '%' || dm.merchants_name || '%'
         LIMIT 1
         ) dm ON true
-        LEFT JOIN DIM_MANUFACTURER dmanuf ON s.manufacturer = dmanuf.manufacturer
+        LEFT JOIN DIM_MANUFACTURER dmanuf ON (s.manufacturer = dmanuf.manufacturer AND dmanuf.manufacturer IS NOT NULL)
+                                                 OR (s.manufacturernumber = dmanuf.manufacturer_number AND dmanuf.manufacturer_number IS NOT NULL)
         LEFT JOIN DIM_CONDITION dc ON s.prices_condition = dc.prices_condition;
 
 
